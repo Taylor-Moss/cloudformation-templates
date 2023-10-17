@@ -1,0 +1,15 @@
+AWSTemplateFormatVersion: 2010-09-09
+Description: Creates a Member Account Vault w/ Vault Lock Configuration
+
+Resources:
+  BackupVault:
+    Type: AWS::Backup::BackupVault
+    Properties:
+      BackupVaultName: Vault01
+      LockConfiguration:
+        MaxRetentionDays: 14
+        MinRetentionDays: 7
+      Notifications:
+        BackupVaultEvents: 
+            - BACKUP_JOB_COMPLETED
+        SNSTopicArn: arn:aws:sns:us-east-1:123456789012:topic01
