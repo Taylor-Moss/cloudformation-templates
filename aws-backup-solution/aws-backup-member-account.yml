@@ -1,0 +1,148 @@
+AWSTemplateFormatVersion: 2010-09-09
+Description: Used as a CloudFormation StackSet. Creates an AWS Backup Vault w/ Vault Lock, SNS topic, EBS volume, and KMS key.
+
+Resources:
+  BackupVault:
+    Type: AWS::Backup::BackupVault
+    Properties:
+      BackupVaultName: Vault01
+      EncryptionKeyArn: !GetAtt KMSKey.Arn
+      LockConfiguration:
+        MaxRetentionDays: 14
+        MinRetentionDays: 7
+      Notifications:
+        BackupVaultEvents: 
+            - BACKUP_JOB_COMPLETED
+        SNSTopicArn: !Ref SNSTopic
+
+  SNSTopic:
+    Type: AWS::SNS::Topic
+    Properties: 
+      KmsMasterKeyId: !Ref KMSKey
+      Subscription: 
+        - Endpoint: email@example.com
+          Protocol: Email
+      TopicName: Topic01
+
+  SNSTopicPolicy:
+    Type: AWS::SNS::TopicPolicy
+    Properties:
+      Topics: 
+        - !Ref SNSTopic
+      PolicyDocument:
+        !Sub >-
+          {
+              "Version": "2008-10-17",
+              "Id": "__default_policy_ID",
+              "Statement": [
+                  {
+                      "Sid": "__default_statement_ID",
+                      "Effect": "Allow",
+                      "Principal": {
+                          "AWS": "*"
+                      },
+                      "Action": [
+                          "SNS:GetTopicAttributes",
+                          "SNS:SetTopicAttributes",
+                          "SNS:AddPermission",
+                          "SNS:RemovePermission",
+                          "SNS:DeleteTopic",
+                          "SNS:Subscribe",
+                          "SNS:ListSubscriptionsByTopic",
+                          "SNS:Publish"
+                      ],
+                      "Resource": "arn:aws:sns:${AWS::Region}:${AWS::AccountId}:Topic01",
+                      "Condition": {
+                          "StringEquals": {
+                              "AWS:SourceOwner": "${AWS::AccountId}"
+                          }
+                      }
+                  },
+                  {
+                      "Sid": "AWS_Backup",
+                      "Effect": "Allow",
+                      "Principal": {
+                          "Service": "backup.amazonaws.com"
+                      },
+                      "Action": "SNS:Publish",
+                      "Resource": "arn:aws:sns:${AWS::Region}:${AWS::AccountId}:Topic01"
+                  }
+              ]
+          }
+
+  EbsVolume:
+    Type: AWS::EC2::Volume
+    Properties: 
+      Encrypted: True
+      KmsKeyId: !Ref KMSKey
+      Size: 1
+      VolumeType: gp3
+      AvailabilityZone: us-east-1a
+      Tags:
+        - Key: "backup"
+          Value: "yes"
+
+  KMSKey:
+    Type: AWS::KMS::Key
+    Properties:
+      Description: Used For AWS Backup Vault, SNS, and EBS
+      Enabled: True
+      PendingWindowInDays: 7
+      KeyPolicy:
+        !Sub >-
+          {
+              "Version": "2012-10-17",
+              "Id": "key-default-1",
+              "Statement": [
+                  {
+                      "Sid": "Enable IAM User Permissions",
+                      "Effect": "Allow",
+                      "Principal": {
+                          "AWS": "arn:aws:iam::${AWS::AccountId}:root"
+                      },
+                      "Action": "kms:*",
+                      "Resource": "*"
+                  },
+                  {
+                      "Sid": "AWS_Backup",
+                      "Effect": "Allow",
+                      "Principal": {
+                          "Service": "backup.amazonaws.com"
+                      },
+                      "Action": [
+                          "kms:GenerateDataKey*",
+                          "kms:Decrypt"
+                      ],
+                      "Resource": "*"
+                  }
+              ]
+          }
+
+  KMSKeyAlias:
+    Type: AWS::KMS::Alias
+    Properties:
+      AliasName: alias/Key01
+      TargetKeyId: !Ref KMSKey
+
+  AWSBackupDefaultServiceRole:
+    Type: AWS::IAM::Role
+    Properties:
+      AssumeRolePolicyDocument: >-
+          {
+              "Version": "2012-10-17",
+              "Statement": [
+                  {
+                      "Effect": "Allow",
+                      "Principal": {
+                          "Service": "backup.amazonaws.com"
+                      },
+                      "Action": "sts:AssumeRole"
+                  }
+              ]
+          }
+      Description: AWSBackupDefaultServiceRole
+      ManagedPolicyArns: 
+        - arn:aws:iam::aws:policy/service-role/AWSBackupServiceRolePolicyForBackup
+        - arn:aws:iam::aws:policy/service-role/AWSBackupServiceRolePolicyForRestores
+      Path: /service-role/
+      RoleName: AWSBackupDefaultServiceRole
