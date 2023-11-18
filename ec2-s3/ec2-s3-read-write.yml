@@ -1,4 +1,155 @@
 AWSTemplateFormatVersion: 2010-09-09
-Description: Creates an EC2 Instance with Read and Write Access to an S3 Bucket.
+Description: Creates an EC2 Instance in a Custom VPC with Read, Write and List Access to an S3 Bucket using a VPC Endpoint.
+
+Parameters:
+  S3BucketParameter:
+    Type: String
+    AllowedPattern: '^[a-z0-9\-\.]+$'
+    ConstraintDescription: Error naming Bucket. Please see https://docs.aws.amazon.com/AmazonS3/latest/userguide/bucketnamingrules.html
+    Description: Enter Bucket Name
 
 Resources:
+#VPC Resources
+  VPC:
+    Type: AWS::EC2::VPC
+    Properties:
+      CidrBlock: 10.0.0.0/16
+      EnableDnsHostnames: True
+      EnableDnsSupport: True
+      InstanceTenancy: default
+
+  Subnet:
+    Type: AWS::EC2::Subnet
+    Properties:
+      AvailabilityZone: us-east-1a
+      CidrBlock: 10.0.1.0/24
+      MapPublicIpOnLaunch: True
+      VpcId: !GetAtt VPC.VpcId
+
+  SecurityGroup:
+    Type: AWS::EC2::SecurityGroup
+    Properties:
+      GroupDescription: Used for the EC2 Instance in this Template
+      GroupName: SG1
+      SecurityGroupEgress: 
+        - CidrIp: 0.0.0.0/0
+          Description: Allow All Outbound
+          IpProtocol: -1
+      SecurityGroupIngress:
+        - CidrIp: 0.0.0.0/0
+          Description: Allow SSH Inbound
+          FromPort: 22
+          ToPort: 22
+          IpProtocol: tcp
+      VpcId: !GetAtt VPC.VpcId
+
+  VPCEndpoint:
+    Type: AWS::EC2::VPCEndpoint
+    Properties:
+      RouteTableIds: 
+        - !GetAtt RouteTable.RouteTableId
+      ServiceName: com.amazonaws.us-east-1.s3
+      VpcEndpointType: Gateway
+      VpcId: !GetAtt VPC.VpcId
+
+  RouteTable:
+    Type: AWS::EC2::RouteTable
+    Properties:
+      VpcId: !GetAtt VPC.VpcId
+
+  Route:
+    Type: AWS::EC2::Route
+    Properties:
+      DestinationCidrBlock: 0.0.0.0/0
+      GatewayId: !GetAtt InternetGateway.InternetGatewayId
+      RouteTableId: !Ref RouteTable
+
+  SubnetRouteTableAssociation:
+    Type: AWS::EC2::SubnetRouteTableAssociation
+    Properties:
+      RouteTableId: !Ref RouteTable
+      SubnetId: !GetAtt Subnet.SubnetId
+
+  InternetGateway:
+    Type: AWS::EC2::InternetGateway
+    Properties:
+      Tags: 
+        - Key: attachment
+          Value: vpc-us-east-1
+
+  VPCGatewayAttachment:
+    Type: AWS::EC2::VPCGatewayAttachment
+    Properties:
+      InternetGatewayId: !GetAtt InternetGateway.InternetGatewayId
+      VpcId: !GetAtt VPC.VpcId
+
+#EC2 Resources
+  EC2Instance:
+    Type: AWS::EC2::Instance
+    Properties:
+      AvailabilityZone: us-east-1a
+      ImageId: ami-0230bd60aa48260c6
+      IamInstanceProfile: !Ref InstanceProfile
+      InstanceType: t3.micro
+      SecurityGroupIds: 
+        - !Ref SecurityGroup
+      SubnetId: !GetAtt Subnet.SubnetId
+
+#IAM Resources
+  InstanceProfile:
+    Type: AWS::IAM::InstanceProfile
+    Properties:
+      InstanceProfileName: InstanceProfileForS3AccessRole
+      Path: /
+      Roles: 
+        - !Ref S3AccessRole
+
+  S3AccessRole:
+    Type: AWS::IAM::Role
+    Properties:
+      AssumeRolePolicyDocument: >-
+          {
+              "Version": "2012-10-17",
+              "Statement": [
+                  {
+                      "Effect": "Allow",
+                      "Principal": {
+                          "Service": "ec2.amazonaws.com"
+                      },
+                      "Action": "sts:AssumeRole"
+                  }
+              ]
+          }
+      Description: Used for EC2 Instances
+      Path: /
+      Policies: 
+       - PolicyDocument: 
+           !Sub >-
+              {
+                "Version": "2012-10-17",
+                "Statement": [
+                  {
+                    "Sid": "Statement1",
+                    "Effect": "Allow",
+                    "Action": [
+                      "s3:Put*",
+                      "s3:Get*",
+                      "s3:List*"
+                    ],
+                    "Resource": [
+                      "arn:aws:s3:::${S3BucketParameter}",
+                      "arn:aws:s3:::${S3BucketParameter}/*"
+                    ]
+                  }
+                ]
+              }
+         PolicyName: S3AccessPolicy
+      RoleName: S3AccessRole
+
+#S3 Resources:
+  S3Bucket:
+    Type: AWS::S3::Bucket
+    Properties:
+      BucketName: !Ref S3BucketParameter
+      VersioningConfiguration:
+        Status: Enabled
